@@ -17,7 +17,14 @@ namespace DevicePreparation
                 DeviceCfg config = new DeviceCfg(args);
                 if(config != null)
                 {
-                    config.DeviceInit();
+                    if(config.HasCommand())
+                    { 
+                        config.DeviceInit();
+                    }
+                    else
+                    {
+                        Console.WriteLine("NO MATCHING COMMAND TO RUN: USE /HELP FOR COMMANDS.");
+                    }
                 }
             }
             catch (Exception ex)

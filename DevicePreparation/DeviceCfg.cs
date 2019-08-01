@@ -8,6 +8,8 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using DevicePreparation.Helpers;
+using DevicePreparation.Interop.DeviceHelper;
 using HidLibrary;
 
 namespace DevicePreparation
@@ -43,22 +45,28 @@ namespace DevicePreparation
         const string IDTECH = "0acd";
         const string IdTechString = "idtech";
 
-        List<int> comPorts = new List<int>(new int [] { 33, 34, 35, 109, 110, 111, 112, 113 });
+        List<int> comPorts = new List<int>(new int [] { 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 109, 110, 111, 112, 113 });
         int targetPort;
 
         // states
+        bool hascommand;
         bool setdefaults;
         bool setinuse;
         bool helponly;
+        bool install280;
+        bool install315;
+        bool uninstall280;
+        bool uninstall315;
 
         #endregion
 
         public DeviceCfg(string[] args)
         {
+            hascommand = true;
             foreach(var option in args)
             {
 
-                switch(option)
+                switch(option.ToLower())
                 {
                     case "/?":
                     case "/h":
@@ -68,7 +76,7 @@ namespace DevicePreparation
                     { 
                         helponly = true;
                         string fullName = Assembly.GetEntryAssembly().Location;
-                        Console.WriteLine($"{System.IO.Path.GetFileNameWithoutExtension(fullName).ToUpper()} [-setinuse] [-setdefaults]");
+                        Console.WriteLine($"{System.IO.Path.GetFileNameWithoutExtension(fullName).ToUpper()} [/SETINUSE] [/SETDEFAULTS] | [/INSTALL280] [/INSTALL315] | [/UNINSTALL280] [/UNINSTALL315]");
                         break;
                     }
                     case "/setdefaults":
@@ -83,14 +91,63 @@ namespace DevicePreparation
                         setinuse = true;
                         break;
                     }
+                    case "/install280":
+                    case "-install280":
+                    { 
+                        install280 = true;
+                        break;
+                    }
+                    case "/install315":
+                    case "-install315":
+                    { 
+                        install315 = true;
+                        break;
+                    }
+                    case "/uninstall280":
+                    case "-uninstall280":
+                    { 
+                        uninstall280 = true;
+                        break;
+                    }
+                    case "/uninstall315":
+                    case "-uninstall315":
+                    { 
+                        uninstall315 = true;
+                        break;
+                    }
+                    default:
+                    {
+                        hascommand = false;
+                        break;
+                    }
                 }
             }
         }
 
+        public bool HasCommand()
+        {
+            return hascommand;
+        }
+
         public void DeviceInit()
         {
+            //DeviceHelper.SetDeviceEnabled(null, null, false);
+            DeviceHelper.Test();
+
             if(!helponly)
             { 
+                // Uninstallation: ignore everything else
+                if(uninstall280)
+                {
+                    Utility.UninstallDrivers((int)IngenicoDriverVersions.INGENICO315);
+                    return;
+                }
+                else if(uninstall315)
+                {
+                    Utility.UninstallDrivers((int)IngenicoDriverVersions.INGENICO315);
+                    return;
+                }
+
                 // Set TC ports-in-use
                 if(setinuse)
                 {
@@ -121,7 +178,7 @@ namespace DevicePreparation
                             var ports = searcher.Get().Cast<ManagementBaseObject>().ToList();
                             if(ports.Count > 0)
                             { 
-                                Console.WriteLine($"PORT NAMES                   : ");
+                                Console.Write($"PORT NAMES                   : ");
                                 foreach(var port in ports)
                                 { 
                                     Console.Write($"{port},");
@@ -156,7 +213,17 @@ namespace DevicePreparation
                 }
                 else
                 {
-                    Console.WriteLine($"No Ingenico device found!");
+                    Console.WriteLine($"device: no Ingenico device found!");
+                }
+
+                // IngenicoUSBDrivers installation
+                if(install315)
+                {
+                    Utility.InstallDrivers((int)IngenicoDriverVersions.INGENICO315);
+                }
+                else if(install280)
+                {
+                    Utility.InstallDrivers((int)IngenicoDriverVersions.INGENICO280);
                 }
             }
         }
@@ -228,6 +295,20 @@ namespace DevicePreparation
         {
             try
             {
+                // Clear in-use COM Port
+                int state = ComDBOpen(out IntPtr PHCOMDB);
+                if(PHCOMDB != null && state == (int)ERROR_STATUS.ERROR_SUCCESS)
+                { 
+                    foreach(var port in comPorts)
+                    { 
+                        long status = ComDBReleasePort((UInt32)PHCOMDB, port);
+                        Console.WriteLine($"device: COM{port} released with status={status}.");
+                    }
+                    long dsfdf1 = ComDBClose((UInt32)PHCOMDB);
+                }
+
+                RescanForHardwareChanges();
+
                 string description = string.Empty;
                 string deviceID = string.Empty;
                 if (FindIngenicoDevice(ref description, ref deviceID))
@@ -245,20 +326,6 @@ namespace DevicePreparation
                             select n + " - " + p["Caption"]).ToList();
                         Console.WriteLine($"DEVICE PORT                  : {tList.FirstOrDefault()}");
                     }
-
-                    // Clear in-use COM Port
-                    int state = ComDBOpen(out IntPtr PHCOMDB);
-                    if(PHCOMDB != null && state == (int)ERROR_STATUS.ERROR_SUCCESS)
-                    { 
-                        foreach(var port in comPorts)
-                        { 
-                            long status = ComDBReleasePort((UInt32)PHCOMDB, port);
-                            Console.WriteLine($"device: COM{port} released with status={status}.");
-                        }
-                        long dsfdf1 = ComDBClose((UInt32)PHCOMDB);
-                    }
-
-                    RescanForHardwareChanges();
                 }
             }
             catch (Exception ex)

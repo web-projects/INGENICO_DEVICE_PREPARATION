@@ -64,6 +64,8 @@
   <ItemGroup>
     <Compile Include="DeviceCfg.cs" />
     <Compile Include="DeviceInformation.cs" />
+    <Compile Include="Helpers\Utility.cs" />
+    <Compile Include="Interop\DeviceHelper.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
@@ -72,7 +74,12 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <Folder Include="Interop\" />
+    <Content Include="Assets\IngenicoUSBDrivers_2.80_setup.exe">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Assets\IngenicoUSBDrivers_3.15_setup.exe">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <BootstrapperPackage Include=".NETFramework,Version=v4.6.1">
