@@ -26,3 +26,4 @@ This an application to Configure Ingenico Devices.
 
 * 20190731 - Initial repository.
 * 20190801 - Added Ingenico USB drivers installation option.
+           - Added Administrative priviliges requirement for utility to execute.
