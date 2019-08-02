@@ -25,6 +25,12 @@ namespace DevicePreparation
                     {
                         Console.WriteLine("NO MATCHING COMMAND TO RUN: USE /HELP FOR COMMANDS.");
                     }
+
+                    if(Debugger.IsAttached)
+                    { 
+                        Console.Write("\r\nPRESS ANY KEY TO EXIT...");
+                        Console.ReadKey();
+                    }
                 }
             }
             catch (Exception ex)

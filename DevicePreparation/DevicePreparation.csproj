@@ -67,6 +67,7 @@
   <ItemGroup>
     <Compile Include="DeviceCfg.cs" />
     <Compile Include="DeviceInformation.cs" />
+    <Compile Include="Helpers\PortHelper.cs" />
     <Compile Include="Helpers\Utility.cs" />
     <Compile Include="Interop\DeviceHelper.cs" />
     <Compile Include="Program.cs" />

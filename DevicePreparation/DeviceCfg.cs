@@ -7,6 +7,7 @@ using System.Management;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using DevicePreparation.Helpers;
 using DevicePreparation.Interop.DeviceHelper;
@@ -47,11 +48,14 @@ namespace DevicePreparation
 
         List<int> comPorts = new List<int>(new int [] { 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 109, 110, 111, 112, 113 });
         int targetPort;
+        int devicePort;
+        string instanceId;
 
         // states
         bool hascommand;
         bool setdefaults;
         bool setinuse;
+        bool resetport;
         bool helponly;
         bool install280;
         bool install315;
@@ -76,7 +80,7 @@ namespace DevicePreparation
                     { 
                         helponly = true;
                         string fullName = Assembly.GetEntryAssembly().Location;
-                        Console.WriteLine($"{System.IO.Path.GetFileNameWithoutExtension(fullName).ToUpper()} [/SETINUSE] [/SETDEFAULTS] | [/INSTALL280] [/INSTALL315] | [/UNINSTALL280] [/UNINSTALL315]");
+                        Console.WriteLine($"{System.IO.Path.GetFileNameWithoutExtension(fullName).ToUpper()} [/SETINUSE] [/SETDEFAULTS] [/RESETPORT]| [/INSTALL280] [/INSTALL315] | [/UNINSTALL280] [/UNINSTALL315]");
                         break;
                     }
                     case "/setdefaults":
@@ -89,6 +93,12 @@ namespace DevicePreparation
                     case "-setinuse":
                     { 
                         setinuse = true;
+                        break;
+                    }
+                    case "/resetport":
+                    case "-resetport":
+                    { 
+                        resetport = true;
                         break;
                     }
                     case "/install280":
@@ -157,7 +167,7 @@ namespace DevicePreparation
                 // Set TC default COM Ports
                 if(setdefaults)
                 {
-                    SetDefaultCommPorts();
+                    devicePort = SetDefaultCommPorts();
                 }
 
                 string description = string.Empty;
@@ -170,46 +180,57 @@ namespace DevicePreparation
                     Console.WriteLine($"DESCRIPTION                  : {description}");
                     Console.WriteLine($"DEVICE ID                    : {deviceID}");
 
-                    using (var searcher = new ManagementObjectSearcher("SELECT * FROM WIN32_SerialPort"))
-                    {
-                        try
-                        {
-                            string[] portNames = SerialPort.GetPortNames();
-                            var ports = searcher.Get().Cast<ManagementBaseObject>().ToList();
-                            if(ports.Count > 0)
-                            { 
-                                Console.Write($"PORT NAMES                   : ");
-                                foreach(var port in ports)
-                                { 
-                                    Console.Write($"{port},");
-                                }
-                                Console.WriteLine("");
-                            }
-                            var tList = (from n in portNames
-                                join p in ports on n equals p["DeviceID"].ToString()
-                                select n + " - " + p["Caption"]).ToList();
-                            if(tList.Count > 0)
-                            { 
-                                Console.WriteLine($"DEVICE PORT                  : {tList.FirstOrDefault()}");
-                            }
-                            else
-                            { 
-                                Console.WriteLine($"DEVICE PORT                  : NONE FOUND");
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"EXCEPTION                    : {ex.Message}");
-                        }
+                    List<string> usbCommPorts = ReportUSBCommPorts();
+
+                    List<string> result = ReportSerialCommPorts();
+
+                    foreach(var port in result)
+                    { 
+                        targetPort = Convert.ToInt32(port?.TrimStart(new char [] { 'C', 'O', 'M' }) ?? "0");
+                        //if(targetPort > 0)
+                        //{
+                        //    comPorts.Add(targetPort);
+                        //}
+                        //ClearUpCommPorts();
                     }
 
-                    string result = ReportCommPorts()?.TrimStart(new char [] { 'C', 'O', 'M' }) ?? "0";
-                    targetPort = Convert.ToInt32(result);
-                    //if(targetPort > 0)
-                    //{
-                    //    comPorts.Add(targetPort);
-                    //}
-                    //ClearUpCommPorts();
+                    if(resetport)
+                    {
+                        if(!string.IsNullOrEmpty(instanceId))
+                        {
+                            Console.WriteLine($"device: reset device with instanceId: {instanceId}");
+
+                            //var childThreads = new List<Task>();
+                            //var task = new Task(() =>
+                            //{
+                            //    Thread.CurrentThread.IsBackground = false;
+                            //    try
+                            //    { 
+                                    PortHelper.TryResetPortByInstanceId(instanceId);
+                            //    }
+                            //    catch (Exception ex)
+                            //    {
+                            //        Console.WriteLine(ex.Message);
+                            //    }
+                            //});
+
+                            //task.Start();
+                            //childThreads.Add(task);
+
+                            //var completionTask = new Task(() => 
+                            //{ 
+                            //    Task.WaitAll(childThreads.ToArray());
+                            //}).ContinueWith(t => 
+                            //{ 
+                            //    Console.WriteLine($"device: reset device completed.");
+                            //});
+                            //completionTask.Wait();
+                        }
+                        else
+                        {
+                            Console.WriteLine($"device: no instance ID found!");
+                        }
+                    }
                 }
                 else
                 {
@@ -291,8 +312,9 @@ namespace DevicePreparation
             }
         }
 
-        private void SetDefaultCommPorts()
+        private int SetDefaultCommPorts()
         {
+            int ingenicoPort = 0;
             try
             {
                 // Clear in-use COM Port
@@ -324,7 +346,13 @@ namespace DevicePreparation
                         var tList = (from n in portNames
                             join p in ports on n equals p["DeviceID"].ToString()
                             select n + " - " + p["Caption"]).ToList();
-                        Console.WriteLine($"DEVICE PORT                  : {tList.FirstOrDefault()}");
+                        string firstPort = tList.FirstOrDefault();
+                        if(firstPort.StartsWith("COM"))
+                        {
+                            string [] tokens = firstPort.Split(' ');
+                            ingenicoPort = Convert.ToInt32(tokens[0].TrimStart(new char [] { 'C', 'O', 'M' }));
+                        }
+                        Debug.WriteLine($"DEVICE PORT                  : {firstPort}");
                     }
                 }
             }
@@ -332,15 +360,78 @@ namespace DevicePreparation
             {
                 throw ex;
             }
+
+            return ingenicoPort;
         }
 
-        private string ReportCommPorts()
+        private List<string> ReportUSBCommPorts()
         {
-            string port = "0";
+            List<string> ports = new List<string>();
+
+            try
+            {
+                using (var searcher = new ManagementObjectSearcher("SELECT * FROM WIN32_SerialPort"))
+                {
+                    try
+                    {
+                        string[] portNames = SerialPort.GetPortNames();
+                        var portsFound = searcher.Get().Cast<ManagementBaseObject>().ToList();
+                        if(portsFound.Count > 0)
+                        { 
+                            Console.Write($"PORT NAMES                   : ");
+                            foreach(var port in portsFound)
+                            { 
+                                Console.Write($"{port},");
+                            }
+                            Console.WriteLine("");
+                        
+                            var tList = (from n in portNames
+                                join p in portsFound on n equals p["DeviceID"].ToString()
+                                select n + " - " + p["Caption"]).ToList();
+                            if(tList.Count > 0)
+                            { 
+                                string portName = tList.FirstOrDefault();
+                                Console.WriteLine($"DEVICE PORT                  : {portName}");
+                                foreach (ManagementObject port in searcher.Get())
+                                {
+                                    string [] portCOM = portName.Split(' ');
+                                    if (port["DeviceID"].ToString().Equals(portCOM[0]))
+                                    { 
+                                        instanceId = port["PNPDeviceID"].ToString();
+                                    }
+                                }
+                            }
+                            else
+                            { 
+                                Console.WriteLine($"DEVICE PORT                  : NONE FOUND");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"EXCEPTION                    : {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"device: ReportCommPorts() exception={ex.Message}");
+            }
+
+            return ports;
+        }
+
+        private List<string> ReportSerialCommPorts()
+        {
+            List<string> ports = new List<string>();
 
             try
             {
                 ManagementObjectSearcher searcher = new ManagementObjectSearcher("root\\WMI", "SELECT * FROM MSSerial_PortName");
+
+                Console.WriteLine("--------------------------------------------------------------------------------------");
+                Console.WriteLine("SEARCH FOR MSSerial_PortName BY INSTANCE");
+                Console.WriteLine("--------------------------------------------------------------------------------------");
 
                 foreach (ManagementObject queryObj in searcher.Get())
                 {
@@ -348,12 +439,9 @@ namespace DevicePreparation
                     //it must be a USB to serial device
                     if (queryObj["InstanceName"].ToString().Contains("USB"))
                     {
-                        Console.WriteLine("--------------------------------------------------------------------------------------");
-                        Console.WriteLine("MSSerial_PortName instance");
-                        Console.WriteLine("--------------------------------------------------------------------------------------");
-                        Console.WriteLine("InstanceName: {0}", queryObj["InstanceName"]);
-                        Console.WriteLine(queryObj["PortName"] + " is a USB to SERIAL adapter/converter");
-                        port = queryObj["PortName"].ToString();
+                        Console.WriteLine($"INSTANCE NAME                  : {queryObj["InstanceName"]}");
+                        Console.WriteLine($"USB to SERIAL adapter/converter: {queryObj["PortName"]}");
+                        ports.Add(queryObj["PortName"].ToString());
                         //SerialPort p = new SerialPort(port);
                         //p.PortName = "COM11";
                         //return port;
@@ -365,7 +453,7 @@ namespace DevicePreparation
                 Console.WriteLine($"device: ReportCommPorts() exception={ex.Message}");
             }
 
-            return port;
+            return ports;
         }
 
         private void RescanForHardwareChanges()
