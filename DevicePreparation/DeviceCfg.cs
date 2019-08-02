@@ -139,7 +139,7 @@ namespace DevicePreparation
             return hascommand;
         }
 
-        public void DeviceInit()
+        public bool DeviceInit()
         {
             //DeviceHelper.SetDeviceEnabled(null, null, false);
             DeviceHelper.Test();
@@ -150,12 +150,12 @@ namespace DevicePreparation
                 if(uninstall280)
                 {
                     Utility.UninstallDrivers((int)IngenicoDriverVersions.INGENICO315);
-                    return;
+                    return false;
                 }
                 else if(uninstall315)
                 {
                     Utility.UninstallDrivers((int)IngenicoDriverVersions.INGENICO315);
-                    return;
+                    return false;
                 }
 
                 // Set TC ports-in-use
@@ -193,48 +193,11 @@ namespace DevicePreparation
                         //}
                         //ClearUpCommPorts();
                     }
-
-                    if(resetport)
-                    {
-                        if(!string.IsNullOrEmpty(instanceId))
-                        {
-                            Console.WriteLine($"device: reset device with instanceId: {instanceId}");
-
-                            //var childThreads = new List<Task>();
-                            //var task = new Task(() =>
-                            //{
-                            //    Thread.CurrentThread.IsBackground = false;
-                            //    try
-                            //    { 
-                                    PortHelper.TryResetPortByInstanceId(instanceId);
-                            //    }
-                            //    catch (Exception ex)
-                            //    {
-                            //        Console.WriteLine(ex.Message);
-                            //    }
-                            //});
-
-                            //task.Start();
-                            //childThreads.Add(task);
-
-                            //var completionTask = new Task(() => 
-                            //{ 
-                            //    Task.WaitAll(childThreads.ToArray());
-                            //}).ContinueWith(t => 
-                            //{ 
-                            //    Console.WriteLine($"device: reset device completed.");
-                            //});
-                            //completionTask.Wait();
-                        }
-                        else
-                        {
-                            Console.WriteLine($"device: no instance ID found!");
-                        }
-                    }
                 }
                 else
                 {
                     Console.WriteLine($"device: no Ingenico device found!");
+                    resetport = false;
                 }
 
                 // IngenicoUSBDrivers installation
@@ -247,6 +210,8 @@ namespace DevicePreparation
                     Utility.InstallDrivers((int)IngenicoDriverVersions.INGENICO280);
                 }
             }
+
+            return resetport ? (!string.IsNullOrEmpty(instanceId)) : false;
         }
 
         public bool FindIngenicoDevice(ref string description, ref string deviceID)
@@ -299,16 +264,38 @@ namespace DevicePreparation
             return devices;
         }
 
+        public bool ResetPort()
+        {
+            Console.WriteLine($"device: reset device with instanceId: {instanceId}");
+            bool result = PortHelper.TryResetPortByInstanceId(instanceId);
+
+            // Search for new devices attaching
+            RescanForHardwareChanges();
+
+            return result;
+        }
+
         private void SetPortsInUse()
         {
             int state = ComDBOpen(out IntPtr PHCOMDB);
-            if(PHCOMDB != null && state == (int)ERROR_STATUS.ERROR_SUCCESS)
+            if(PHCOMDB != null)
             {
-                for(int port = 1; port < 250; port++)
+                if(state == (int)ERROR_STATUS.ERROR_SUCCESS)
                 { 
-                    long result = ComDBClaimPort(PHCOMDB, port, true, out bool forced);
-                    Console.WriteLine($"device: COM{port} forced in-use with status={result}.");
+                    for(int port = 1; port < 250; port++)
+                    { 
+                        long result = ComDBClaimPort(PHCOMDB, port, true, out bool forced);
+                        Console.WriteLine($"device: COM{port} forced in-use with status={result}.");
+                    }
                 }
+                else
+                {
+                    Console.WriteLine($"ClearUpCommPorts: failed with state={state}");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"ClearUpCommPorts: failed with state={state}");
             }
         }
 
@@ -321,14 +308,26 @@ namespace DevicePreparation
                 int state = ComDBOpen(out IntPtr PHCOMDB);
                 if(PHCOMDB != null && state == (int)ERROR_STATUS.ERROR_SUCCESS)
                 { 
+                    string comPortList = string.Empty;
+                    foreach(var val in comPorts)
+                    {
+                        comPortList += $"{val},";
+                    }
+                    comPortList = comPortList.TrimEnd(',');
+                    Console.WriteLine($"device: releasing COM ports=[{comPortList}]");
                     foreach(var port in comPorts)
                     { 
                         long status = ComDBReleasePort((UInt32)PHCOMDB, port);
-                        Console.WriteLine($"device: COM{port} released with status={status}.");
+                        if(status != 0)
+                        { 
+                            Console.WriteLine($"device: COM{port} release failed with status={status}.");
+                        }
                     }
+                    Console.WriteLine($"device: releasing COM ports completed.");
                     long dsfdf1 = ComDBClose((UInt32)PHCOMDB);
                 }
 
+                // Search for new devices attaching
                 RescanForHardwareChanges();
 
                 string description = string.Empty;
@@ -370,6 +369,10 @@ namespace DevicePreparation
 
             try
             {
+                Console.WriteLine("--------------------------------------------------------------------------------------");
+                Console.WriteLine("SEARCH FOR WIN32_SerialPort BY INSTANCE");
+                Console.WriteLine("--------------------------------------------------------------------------------------");
+
                 using (var searcher = new ManagementObjectSearcher("SELECT * FROM WIN32_SerialPort"))
                 {
                     try
@@ -406,6 +409,10 @@ namespace DevicePreparation
                                 Console.WriteLine($"DEVICE PORT                  : NONE FOUND");
                             }
                         }
+                        else
+                        {
+                            Console.WriteLine($"NONE FOUND");
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -439,7 +446,12 @@ namespace DevicePreparation
                     //it must be a USB to serial device
                     if (queryObj["InstanceName"].ToString().Contains("USB"))
                     {
-                        Console.WriteLine($"INSTANCE NAME                  : {queryObj["InstanceName"]}");
+                        string instanceName = $"{queryObj["InstanceName"]}";
+                        if(instanceName.StartsWith("USB\\VID_0B00"))
+                        {
+                            instanceId = instanceName;
+                        }
+                        Console.WriteLine($"INSTANCE NAME                  : {instanceName}");
                         Console.WriteLine($"USB to SERIAL adapter/converter: {queryObj["PortName"]}");
                         ports.Add(queryObj["PortName"].ToString());
                         //SerialPort p = new SerialPort(port);
@@ -458,6 +470,8 @@ namespace DevicePreparation
 
         private void RescanForHardwareChanges()
         {
+            Console.WriteLine("device: rescanning for hardware changes...");
+
             int pdnDevInst = 0;
 
             if (CM_Locate_DevNodeA(ref pdnDevInst, null, CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS)
@@ -466,7 +480,7 @@ namespace DevicePreparation
             }
             if (CM_Reenumerate_DevNode(pdnDevInst, CM_REENUMERATE_NORMAL) != CR_SUCCESS)
             { 
-                Console.WriteLine("Failed to reenumerate hardware devices");
+                Console.WriteLine("device: failed to reenumerate hardware devices");
             }
             else
             {

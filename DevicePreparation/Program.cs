@@ -14,12 +14,23 @@ namespace DevicePreparation
             try
             {
 
-                DeviceCfg config = new DeviceCfg(args);
-                if(config != null)
+                DeviceCfg device = new DeviceCfg(args);
+                if(device != null)
                 {
-                    if(config.HasCommand())
+                    if(device.HasCommand())
                     { 
-                        config.DeviceInit();
+                        bool resetport = device.DeviceInit();
+                        if(resetport)
+                        {
+                            Console.WriteLine($"\r\nmain  : reset port requested.");
+                            Task responseTask = Task.Run(() => 
+                            { 
+                                bool result = device.ResetPort();
+                                Console.WriteLine($"main  : reset port completed with result={result}");
+                            });
+                            Task newTask = responseTask.ContinueWith(t => Console.WriteLine("main  : waiting for port reset to complete..."));
+                            newTask.Wait();
+                        }
                     }
                     else
                     {
