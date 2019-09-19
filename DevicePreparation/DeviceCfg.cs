@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO.Ports;
 using System.Linq;
+using System.ComponentModel;
 using System.Management;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -12,6 +13,8 @@ using System.Threading.Tasks;
 using DevicePreparation.Helpers;
 using DevicePreparation.Interop.DeviceHelper;
 using HidLibrary;
+using Microsoft.Win32;
+using System.Text.RegularExpressions;
 
 namespace DevicePreparation
 {
@@ -21,9 +24,11 @@ namespace DevicePreparation
         static extern int ComDBOpen(out IntPtr hComDB);
         [DllImport("MSPorts.dll")]
         public static extern long ComDBClose(UInt32 PHCOMDB);
-        [DllImport("MSPorts.dll")]
+        [DllImport("MSPorts.dll", SetLastError=true)]
+        public static extern long ComDBGetCurrentPortUsage(IntPtr PHComDB, [In, Out] byte[] Buffer, Int32 BufferSize, Int32 ReportType, out Int32 MaxPortsReported);
+        [DllImport("MSPorts.dll", SetLastError=true)]
         public static extern long ComDBReleasePort(UInt32 PHCOMDB,int ComNumber);
-        [DllImport("MSPorts.dll")]
+        [DllImport("MSPorts.dll", SetLastError=true)]
         public static extern long ComDBClaimPort(IntPtr hComDB, int  ComNumber, bool ForceClaim, out bool Force);
 
         // Rescan for hardware changes
@@ -36,6 +41,16 @@ namespace DevicePreparation
         public const int CM_LOCATE_DEVNODE_NORMAL = 0x00000000;
         public const int CM_REENUMERATE_NORMAL = 0x00000000;
         public const int CR_SUCCESS = 0x00000000;
+
+         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        public static extern int RegisterWindowMessage(string lpString);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        static extern bool SendNotifyMessage(int hWnd, int Msg, int wParam, int lParam);
+
+        private const int HWND_BROADCAST = 0xffff;
+        private const int WM_WININICHANGE = 0x001a;
+        private const int WM_SETTINGCHANGE = 0x001a;
 
         /********************************************************************************************************/
         // ATTRIBUTES
@@ -53,8 +68,11 @@ namespace DevicePreparation
 
         // states
         bool hascommand;
+        bool findingenico;
         bool setdefaults;
+        bool getinfo;
         bool setinuse;
+        bool setport;
         bool resetport;
         bool helponly;
         bool install280;
@@ -80,7 +98,19 @@ namespace DevicePreparation
                     { 
                         helponly = true;
                         string fullName = Assembly.GetEntryAssembly().Location;
-                        Console.WriteLine($"{System.IO.Path.GetFileNameWithoutExtension(fullName).ToUpper()} [/SETINUSE] [/SETDEFAULTS] [/RESETPORT]| [/INSTALL280] [/INSTALL315] | [/UNINSTALL280] [/UNINSTALL315]");
+                        Console.WriteLine($"{System.IO.Path.GetFileNameWithoutExtension(fullName).ToUpper()} [/INFO] [/SETINUSE] [/SETDEFAULTS] [/RESETPORT]| [/INSTALL280] [/INSTALL315] | [/UNINSTALL280] [/UNINSTALL315]");
+                        break;
+                    }
+                    case "/info":
+                    case "-info":
+                    { 
+                        getinfo = true;
+                        break;
+                    }
+                    case "/findingenico":
+                    case "-findingenico":
+                    { 
+                        findingenico = true;
                         break;
                     }
                     case "/setdefaults":
@@ -93,6 +123,12 @@ namespace DevicePreparation
                     case "-setinuse":
                     { 
                         setinuse = true;
+                        break;
+                    }
+                    case "/setport":
+                    case "-setport":
+                    { 
+                        setport = true;
                         break;
                     }
                     case "/resetport":
@@ -158,6 +194,12 @@ namespace DevicePreparation
                     return false;
                 }
 
+                // Disable USB Suspend
+                if(!getinfo)
+                {
+                    SelectiveUSBSuspendDisable();
+                }
+
                 // Set TC ports-in-use
                 if(setinuse)
                 {
@@ -167,6 +209,20 @@ namespace DevicePreparation
                 // Set TC default COM Ports
                 if(setdefaults)
                 {
+                    string instanceId = string.Empty;
+                    List<string> result = ReportUSBCommPorts(ref instanceId);
+                    foreach(var port in result)
+                    { 
+                        int targetPort = Convert.ToInt32(port?.TrimStart(new char [] { 'C', 'O', 'M' }) ?? "0");
+                        if (targetPort > 0)
+                        {
+                            if (comPorts.IndexOf(targetPort) != -1)
+                            { 
+                                comPorts.Remove(targetPort);
+                            }
+                        }
+                    }
+
                     devicePort = SetDefaultCommPorts();
                 }
 
@@ -180,17 +236,58 @@ namespace DevicePreparation
                     Console.WriteLine($"DESCRIPTION                  : {description}");
                     Console.WriteLine($"DEVICE ID                    : {deviceID}");
 
-                    List<string> usbCommPorts = ReportUSBCommPorts();
+                    string compare1 = "";
+                    Match usbPattern = Regex.Match(deviceID,  @"^USB\\", RegexOptions.IgnoreCase);
+                    if(usbPattern.Success)
+                    {
+                        compare1 = Regex.Replace(deviceID, @"^USB\\", "", RegexOptions.IgnoreCase);
+                    }
+                    else
+                    {
+                        usbPattern = Regex.Match(deviceID,  @"^USBVCOM\\", RegexOptions.IgnoreCase);
+                        if(usbPattern.Success)
+                        {
+                            compare1 = Regex.Replace(deviceID, @"^USBVCOM\\", "", RegexOptions.IgnoreCase);
+                        }
+                    }
+                    string compare2 = "";
+                    if (!string.IsNullOrEmpty(compare1))
+                    {
+                        compare2 = compare1.Replace('\\', '#');
+                        string usbcommport = GetDeviceSerialComm(compare1, compare2, "INST_0");
+                        Console.WriteLine($"DEVICE PORT                  : {usbcommport}");
+                        int targetPort = Convert.ToInt32(usbcommport?.TrimStart(new char[] { 'C', 'O', 'M' }) ?? "0");
+                        if (targetPort > 0)
+                        {
+                            if (targetPort == 35)
+                            {
+                                Console.WriteLine($"\r\nIngenico device currently installed on COM{targetPort}\r\n");
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine($"\r\nDevice  ID '{deviceID}' is currently installed on '{usbcommport}'\r\n");
+                        }
+                    }
 
+                    if(setport)
+                    {
+                        SetDeviceSerialComm(compare1, compare2, "COM35");
+                    }
+
+                    List<string> usbCommPorts = ReportUSBCommPorts(ref instanceId);
+
+                    Console.WriteLine("");
                     List<string> result = ReportSerialCommPorts();
 
                     foreach(var port in result)
                     { 
                         targetPort = Convert.ToInt32(port?.TrimStart(new char [] { 'C', 'O', 'M' }) ?? "0");
-                        //if(targetPort > 0)
-                        //{
+                        if(targetPort > 0)
+                        {
+                            Console.WriteLine($"SERIAL DEVICE FOUND ON         : COM{targetPort}");
                         //    comPorts.Add(targetPort);
-                        //}
+                        }
                         //ClearUpCommPorts();
                     }
                 }
@@ -226,6 +323,141 @@ namespace DevicePreparation
                 return true;
             }
             return false;
+        }
+
+        string GetUSBComPorts(string usbDeviceName)
+        {
+            string port = string.Empty;
+            var searcher = new ManagementObjectSearcher(@"Select * From Win32_USBHub");
+            ManagementObjectCollection collection = searcher.Get();
+            foreach (var device in collection)
+            {                
+                string deviceId = device["DeviceID"].ToString();
+                //port = device["Caption"].ToString();
+                port = device["Name"].ToString();
+                if (deviceId == usbDeviceName)
+                { 
+                    Console.WriteLine($"Port for \"{usbDeviceName}\" is \"{port}\"");
+                    Debug.WriteLine($"Port for \"{usbDeviceName}\" is \"{port}\"");
+                    break;
+                }
+            }
+            return port;
+        }
+
+        string GetDeviceSerialComm(string compare1, string compare2, string compare3)
+        {
+            string port = null;
+            try
+            {
+                using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+                using (var rk = hklm.OpenSubKey(@"HARDWARE\DEVICEMAP\SERIALCOMM"))
+                {
+                    foreach (var skName in rk.GetValueNames())
+                    {
+                        int offset = skName.IndexOf("VID_0B00");
+                        if(offset != -1)
+                        { 
+                            if(skName.IndexOf(compare1, offset, StringComparison.InvariantCultureIgnoreCase) != -1 ||
+                               skName.IndexOf(compare2, offset, StringComparison.InvariantCultureIgnoreCase) != -1 ||
+                               skName.IndexOf(compare3, offset, StringComparison.InvariantCultureIgnoreCase) != -1)
+                            {
+                                port =  rk.GetValue(skName).ToString();
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"SearchIngenicoDriversInstalled - Execution Error: {ex.Message}");
+            }
+
+            return port;
+        }
+
+        void SetTerminalComPort()
+        {
+            //Computer\HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Enum\usbVcom\VID_0B00&PID_0061\80242705\Device Parameters
+            /*try
+            {
+                using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry64))
+                using (var rk = hklm.OpenSubKey(@"Software\Ingenico\Ingenico Form Builder\Terminal\Serial", true))
+                {
+                    foreach (var skName in rk.GetValueNames())
+                    {
+                        int offset = skName.IndexOf("VID_0B00");
+                        if(offset != -1)
+                        { 
+                            if(skName.IndexOf(compare1, offset, StringComparison.InvariantCultureIgnoreCase) != -1 ||
+                               skName.IndexOf(compare2, offset, StringComparison.InvariantCultureIgnoreCase) != -1)
+                            {
+                                string port =  rk.GetValue(skName).ToString();
+                                if(!string.Equals(port, comPort, StringComparison.InvariantCultureIgnoreCase))
+                                {
+                                    rk.SetValue(skName, comPort);
+                                    SendNotifyMessage(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 0);
+                                    Task responseTask = Task.Run(() => 
+                                    { 
+                                        RescanForHardwareChanges();
+                                        Console.WriteLine($"device: hardware scan complete.");
+                                    });
+                                    Task newTask = responseTask.ContinueWith(t => Console.WriteLine("device: waiting for hardware scan to complete..."));
+                                    newTask.Wait();
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"SearchIngenicoDriversInstalled - Execution Error: {ex.Message}");
+            }*/
+        }
+        string SetDeviceSerialComm(string compare1, string compare2, string comPort)
+        {
+            string port = string.Empty;
+            try
+            {
+                using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+                using (var rk = hklm.OpenSubKey(@"HARDWARE\DEVICEMAP\SERIALCOMM", true))
+                {
+                    foreach (var skName in rk.GetValueNames())
+                    {
+                        int offset = skName.IndexOf("VID_0B00");
+                        if(offset != -1)
+                        { 
+                            if(skName.IndexOf(compare1, offset, StringComparison.InvariantCultureIgnoreCase) != -1 ||
+                               skName.IndexOf(compare2, offset, StringComparison.InvariantCultureIgnoreCase) != -1)
+                            {
+                                port =  rk.GetValue(skName).ToString();
+                                if(!string.Equals(port, comPort, StringComparison.InvariantCultureIgnoreCase))
+                                {
+                                    rk.SetValue(skName, comPort);
+                                    SendNotifyMessage(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 0);
+                                    Task responseTask = Task.Run(() => 
+                                    { 
+                                        RescanForHardwareChanges();
+                                        Console.WriteLine($"device: hardware scan complete.");
+                                    });
+                                    Task newTask = responseTask.ContinueWith(t => Console.WriteLine("device: waiting for hardware scan to complete..."));
+                                    newTask.Wait();
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"SearchIngenicoDriversInstalled - Execution Error: {ex.Message}");
+            }
+
+            return port;
         }
 
         public static List<USBDeviceInfo> GetUSBDevices()
@@ -285,6 +517,7 @@ namespace DevicePreparation
                     for(int port = 1; port < 250; port++)
                     { 
                         long result = ComDBClaimPort(PHCOMDB, port, true, out bool forced);
+                        result &= 0x00000000000FFFFF;
                         Console.WriteLine($"device: COM{port} forced in-use with status={result}.");
                     }
                 }
@@ -299,6 +532,55 @@ namespace DevicePreparation
             }
         }
 
+        private byte [] GetCurrentCommPorts(IntPtr PHComDB)
+        {
+            byte [] buffer = null;
+            try
+            {
+                int bufferSize = 0;
+                Int32 maxportsReported = 0;
+                long status = ComDBGetCurrentPortUsage(PHComDB, buffer, bufferSize, (Int32)REPORT_BYTES.CDB_REPORT_BYTES, out maxportsReported);
+                status &= 0x00000000000FFFFF;
+                if(status == 0 && Marshal.GetLastWin32Error() == 0)
+                { 
+                    if(maxportsReported > 0)
+                    { 
+                        bufferSize = maxportsReported;
+                        //IntPtr buffer = new IntPtr(bufferSize);
+                        //byte [] buffer = new byte[bufferSize];
+                        //IntPtr ptr = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(byte)) * buffer.Length);
+                        //Marshal.Copy(buffer, 0, ptr, buffer.Length);
+                        //Marshal.FreeHGlobal(ptr);
+                        //IntPtr ptr = Marshal.AllocCoTaskMem(bufferSize);
+                        //status = ComDBGetCurrentPortUsage(PHComDB, ref ptr, bufferSize, (Int32)REPORT_BYTES.CDB_REPORT_BITS, ref maxportsReported);
+                        buffer = new byte[bufferSize];
+                        status = ComDBGetCurrentPortUsage(PHComDB, buffer, bufferSize, (Int32)REPORT_BYTES.CDB_REPORT_BYTES, out maxportsReported);
+                        status &= 0x00000000000FFFFF;
+                        if(status == 0 && Marshal.GetLastWin32Error() == 0)
+                        { 
+                            Console.WriteLine($"device: GetCurrentCommPorts() buffer size={maxportsReported}.");
+                        }
+                    }
+                    else
+                    {
+                        buffer = new byte[1];
+                    }
+                }
+                else
+                {
+                    //ERROR_ADAP_HDW_ERR = 57L
+                    string value = string.Format("{0:X}", status);
+                    Console.WriteLine($"device: GetCurrentCommPorts() failed with status=0x{value}.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"EXCEPTION IN GetCurrentCommPorts(): {ex.Message}");
+            }
+
+            return buffer;
+        }
+
         private int SetDefaultCommPorts()
         {
             int ingenicoPort = 0;
@@ -307,23 +589,48 @@ namespace DevicePreparation
                 // Clear in-use COM Port
                 int state = ComDBOpen(out IntPtr PHCOMDB);
                 if(PHCOMDB != null && state == (int)ERROR_STATUS.ERROR_SUCCESS)
-                { 
+                {
+                    byte [] buffer = GetCurrentCommPorts(PHCOMDB);
                     string comPortList = string.Empty;
                     foreach(var val in comPorts)
                     {
-                        comPortList += $"{val},";
-                    }
-                    comPortList = comPortList.TrimEnd(',');
-                    Console.WriteLine($"device: releasing COM ports=[{comPortList}]");
-                    foreach(var port in comPorts)
-                    { 
-                        long status = ComDBReleasePort((UInt32)PHCOMDB, port);
-                        if(status != 0)
+                        if(buffer?.Length > 0)
                         { 
-                            Console.WriteLine($"device: COM{port} release failed with status={status}.");
+                            if(buffer.Length >= val -1)
+                            { 
+                                if(buffer[val - 1] == 1)
+                                { 
+                                    comPortList += $"{val},";
+                                }
+                            }
+                        }
+                        else
+                        { 
+                            comPortList += $"{val},";
                         }
                     }
-                    Console.WriteLine($"device: releasing COM ports completed.");
+                    comPortList = comPortList.TrimEnd(',');
+                    if(comPortList.Length > 0)
+                    { 
+                        Console.WriteLine($"device: releasing COM ports=[{comPortList}]");
+                        foreach(var port in comPorts)
+                        { 
+                            long status = ComDBReleasePort((UInt32)PHCOMDB, port);
+                            status &= 0x00000000000FFFFF;
+                            if(status != 0 || Marshal.GetLastWin32Error() != 0)
+                            { 
+                                //string value = string.Format("{0:X}", new Win32Exception(Marshal.GetLastWin32Error()).Message);
+                                string value = string.Format("{0:X}", status);
+                                Console.WriteLine($"device: COM{port} release failed with status=0x{value}.");
+                            }
+                        }
+                        Console.WriteLine($"device: releasing COM ports completed.");
+                    }
+                    else
+                    { 
+                        Console.WriteLine($"no COM ports to release.");
+                    }
+
                     long dsfdf1 = ComDBClose((UInt32)PHCOMDB);
                 }
 
@@ -334,7 +641,7 @@ namespace DevicePreparation
                 string deviceID = string.Empty;
                 if (FindIngenicoDevice(ref description, ref deviceID))
                 {
-                    Console.WriteLine("device capabilities ----------------------------------------------------------------");
+                    Console.WriteLine("\ndevice capabilities ----------------------------------------------------------------");
                     Console.WriteLine($"DESCRIPTION                  : {description}");
                     Console.WriteLine($"DEVICE ID                    : {deviceID}");
 
@@ -345,13 +652,16 @@ namespace DevicePreparation
                         var tList = (from n in portNames
                             join p in ports on n equals p["DeviceID"].ToString()
                             select n + " - " + p["Caption"]).ToList();
-                        string firstPort = tList.FirstOrDefault();
-                        if(firstPort.StartsWith("COM"))
-                        {
-                            string [] tokens = firstPort.Split(' ');
-                            ingenicoPort = Convert.ToInt32(tokens[0].TrimStart(new char [] { 'C', 'O', 'M' }));
+
+                        foreach(var device in tList)
+                        { 
+                            if(device.StartsWith("COM"))
+                            {
+                                string [] tokens = device.Split(' ');
+                                ingenicoPort = Convert.ToInt32(tokens[0].TrimStart(new char [] { 'C', 'O', 'M' }));
+                            }
+                            Debug.WriteLine($"DEVICE PORT                  : {device}");
                         }
-                        Debug.WriteLine($"DEVICE PORT                  : {firstPort}");
                     }
                 }
             }
@@ -363,7 +673,7 @@ namespace DevicePreparation
             return ingenicoPort;
         }
 
-        private List<string> ReportUSBCommPorts()
+        private List<string> ReportUSBCommPorts(ref string instanceId)
         {
             List<string> ports = new List<string>();
 
@@ -382,11 +692,13 @@ namespace DevicePreparation
                         if(portsFound.Count > 0)
                         { 
                             Console.Write($"PORT NAMES                   : ");
+                            string portValues = string.Empty;
                             foreach(var port in portsFound)
                             { 
-                                Console.Write($"{port},");
+                                portValues += $"{port},";
                             }
-                            Console.WriteLine("");
+                            portValues = portValues.TrimEnd(',');
+                            Console.WriteLine($"{portValues}");
                         
                             var tList = (from n in portNames
                                 join p in portsFound on n equals p["DeviceID"].ToString()
@@ -401,6 +713,7 @@ namespace DevicePreparation
                                     if (port["DeviceID"].ToString().Equals(portCOM[0]))
                                     { 
                                         instanceId = port["PNPDeviceID"].ToString();
+                                        ports.Add(portCOM[0]);
                                     }
                                 }
                             }
@@ -440,29 +753,44 @@ namespace DevicePreparation
                 Console.WriteLine("SEARCH FOR MSSerial_PortName BY INSTANCE");
                 Console.WriteLine("--------------------------------------------------------------------------------------");
 
-                foreach (ManagementObject queryObj in searcher.Get())
-                {
-                    //If the serial port's instance name contains USB 
-                    //it must be a USB to serial device
-                    if (queryObj["InstanceName"].ToString().Contains("USB"))
+                if(searcher != null && searcher.Get() != null)
+                { 
+                    foreach (ManagementObject queryObj in searcher.Get())
                     {
-                        string instanceName = $"{queryObj["InstanceName"]}";
-                        if(instanceName.StartsWith("USB\\VID_0B00"))
+                        Console.WriteLine("GOT SEARCH");
+                        //If the serial port's instance name contains USB 
+                        //it must be a USB to serial device
+                        if (queryObj["InstanceName"]?.ToString().Contains("USB") ?? false)
                         {
-                            instanceId = instanceName;
+                            string instanceName = $"{queryObj["InstanceName"]}";
+                            if(instanceName.StartsWith("USB\\VID_0B00"))
+                            {
+                                instanceId = instanceName;
+                            }
+                            Console.WriteLine($"INSTANCE NAME                  : {instanceName}");
+                            Console.WriteLine($"USB to SERIAL adapter/converter: {queryObj["PortName"]}");
+                            ports.Add(queryObj["PortName"].ToString());
+                            //SerialPort p = new SerialPort(port);
+                            //p.PortName = "COM11";
+                            //return port;
                         }
-                        Console.WriteLine($"INSTANCE NAME                  : {instanceName}");
-                        Console.WriteLine($"USB to SERIAL adapter/converter: {queryObj["PortName"]}");
-                        ports.Add(queryObj["PortName"].ToString());
-                        //SerialPort p = new SerialPort(port);
-                        //p.PortName = "COM11";
-                        //return port;
                     }
+                }
+                else
+                {
+                    Console.WriteLine("NONE FOUND.");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"device: ReportCommPorts() exception={ex.Message}");
+                if(ex.Message.IndexOf("Not supported", StringComparison.InvariantCultureIgnoreCase) != -1)
+                {
+                    Console.WriteLine("NONE FOUND.");
+                }
+                else
+                { 
+                    Console.WriteLine($"device: ReportCommPorts() exception='{ex.Message}'");
+                }
             }
 
             return ports;
@@ -487,11 +815,29 @@ namespace DevicePreparation
                 Console.WriteLine("device: reenumerated hardware devices");
             }
         }
+
+        private static void SelectiveUSBSuspendDisable()
+        {
+            // on battery: disabled
+            string powerCmd = "powercfg";
+            string powerCmdParams = "/SETDCVALUEINDEX SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0";
+            string processExitCode = Utility.RunExternalExeElevated("C:\\Windows\\System32", powerCmd, powerCmdParams);
+
+            // plugged in: disable
+            powerCmdParams = "/SETACVALUEINDEX SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0";
+            processExitCode = Utility.RunExternalExeElevated("C:\\Windows\\System32", powerCmd, powerCmdParams);
+        }
     }
 
     enum ERROR_STATUS
     {
         ERROR_SUCCESS = 0,
         ERROR_ACCESS_DENIED = 5
+    };
+
+    enum REPORT_BYTES
+    {
+        CDB_REPORT_BITS  = 0,
+        CDB_REPORT_BYTES = 1
     };
 }

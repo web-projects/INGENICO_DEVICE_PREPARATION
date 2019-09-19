@@ -29,3 +29,4 @@ This an application to Configure Ingenico Devices.
            - Added Administrative priviliges requirement for utility to execute.
 * 20190802 - Added PortHelper to reset devices.
            - Cleaned up log files.
+* 20190919 - Cleaned up COM Port preparation for WIN 7.

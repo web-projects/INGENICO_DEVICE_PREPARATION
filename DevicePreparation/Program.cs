@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -13,7 +14,9 @@ namespace DevicePreparation
         {
             try
             {
-
+                Console.WriteLine($"\r\n==========================================================================================");
+                Console.WriteLine($"{Assembly.GetEntryAssembly().GetName().Name} - Version {Assembly.GetEntryAssembly().GetName().Version}");
+                Console.WriteLine($"==========================================================================================");
                 DeviceCfg device = new DeviceCfg(args);
                 if(device != null)
                 {
