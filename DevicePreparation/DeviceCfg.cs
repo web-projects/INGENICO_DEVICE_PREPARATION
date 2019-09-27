@@ -329,18 +329,19 @@ namespace DevicePreparation
         string GetUSBComPorts(string usbDeviceName)
         {
             string port = string.Empty;
-            var searcher = new ManagementObjectSearcher(@"Select * From Win32_USBHub");
-            ManagementObjectCollection collection = searcher.Get();
-            foreach (var device in collection)
-            {                
-                string deviceId = device["DeviceID"].ToString();
-                //port = device["Caption"].ToString();
-                port = device["Name"].ToString();
-                if (deviceId == usbDeviceName)
-                { 
-                    Console.WriteLine($"Port for \"{usbDeviceName}\" is \"{port}\"");
-                    Debug.WriteLine($"Port for \"{usbDeviceName}\" is \"{port}\"");
-                    break;
+            using(var searcher = new ManagementObjectSearcher(@"Select * From Win32_USBHub"))
+            { 
+                foreach (var device in searcher.Get())
+                {                
+                    string deviceId = device["DeviceID"].ToString();
+                    //port = device["Caption"].ToString();
+                    port = device["Name"].ToString();
+                    if (deviceId == usbDeviceName)
+                    { 
+                        Console.WriteLine($"Port for \"{usbDeviceName}\" is \"{port}\"");
+                        Debug.WriteLine($"Port for \"{usbDeviceName}\" is \"{port}\"");
+                        break;
+                    }
                 }
             }
             return port;
@@ -468,31 +469,28 @@ namespace DevicePreparation
         public static List<USBDeviceInfo> GetUSBDevices()
         {
             List<USBDeviceInfo> devices = new List<USBDeviceInfo>();
-            ManagementObjectCollection collection;
             try
             {
                 using (var searcher = new ManagementObjectSearcher(@"Select * From Win32_PnPEntity"))
                 {
-                    collection = searcher.Get();
-                }
-                foreach (var device in collection)
-                {
-                    var deviceID = ((string)device.GetPropertyValue("DeviceID") ?? "").ToLower();
-                    if (string.IsNullOrWhiteSpace(deviceID))
-                    { 
-                        continue;
-                    }
-                    Debug.WriteLine($"device: {deviceID}");
-                    if (deviceID.Contains("usb\\") && (deviceID.Contains($"vid_{INGNAR}") || deviceID.Contains($"vid_{INGNSR}") || deviceID.Contains($"vid_{IDTECH}")))
+                    foreach (var device in searcher.Get())
                     {
-                        devices.Add(new USBDeviceInfo(
-                            (string)device.GetPropertyValue("DeviceID"),
-                            (string)device.GetPropertyValue("PNPDeviceID"),
-                            (deviceID.Contains($"vid_{IDTECH}") ? DeviceCfg.IdTechString : (string)device.GetPropertyValue("Description"))
-                        ));
+                        var deviceID = ((string)device.GetPropertyValue("DeviceID") ?? "").ToLower();
+                        if (string.IsNullOrWhiteSpace(deviceID))
+                        { 
+                            continue;
+                        }
+                        Debug.WriteLine($"device: {deviceID}");
+                        if (deviceID.Contains("usb\\") && (deviceID.Contains($"vid_{INGNAR}") || deviceID.Contains($"vid_{INGNSR}") || deviceID.Contains($"vid_{IDTECH}")))
+                        {
+                            devices.Add(new USBDeviceInfo(
+                                (string)device.GetPropertyValue("DeviceID"),
+                                (string)device.GetPropertyValue("PNPDeviceID"),
+                                (deviceID.Contains($"vid_{IDTECH}") ? DeviceCfg.IdTechString : (string)device.GetPropertyValue("Description"))
+                            ));
+                        }
                     }
                 }
-                collection.Dispose();
             }
             catch (Exception ex)
             {
@@ -752,38 +750,39 @@ namespace DevicePreparation
 
             try
             {
-                ManagementObjectSearcher searcher = new ManagementObjectSearcher("root\\WMI", "SELECT * FROM MSSerial_PortName");
-
-                Console.WriteLine("--------------------------------------------------------------------------------------");
-                Console.WriteLine("SEARCH FOR MSSerial_PortName BY INSTANCE");
-                Console.WriteLine("--------------------------------------------------------------------------------------");
-
-                if(searcher != null && searcher.Get() != null)
+                using (var searcher = new ManagementObjectSearcher("root\\WMI", "SELECT * FROM MSSerial_PortName"))
                 { 
-                    foreach (ManagementObject queryObj in searcher.Get())
-                    {
-                        Console.WriteLine("GOT SEARCH");
-                        //If the serial port's instance name contains USB 
-                        //it must be a USB to serial device
-                        if (queryObj["InstanceName"]?.ToString().Contains("USB") ?? false)
+                    Console.WriteLine("--------------------------------------------------------------------------------------");
+                    Console.WriteLine("SEARCH FOR MSSerial_PortName BY INSTANCE");
+                    Console.WriteLine("--------------------------------------------------------------------------------------");
+
+                    if(searcher != null && searcher.Get() != null)
+                    { 
+                        foreach (ManagementObject queryObj in searcher.Get())
                         {
-                            string instanceName = $"{queryObj["InstanceName"]}";
-                            if(instanceName.StartsWith("USB\\VID_0B00"))
+                            Console.WriteLine("GOT SEARCH");
+                            //If the serial port's instance name contains USB 
+                            //it must be a USB to serial device
+                            if (queryObj["InstanceName"]?.ToString().Contains("USB") ?? false)
                             {
-                                instanceId = instanceName;
+                                string instanceName = $"{queryObj["InstanceName"]}";
+                                if(instanceName.StartsWith("USB\\VID_0B00"))
+                                {
+                                    instanceId = instanceName;
+                                }
+                                Console.WriteLine($"INSTANCE NAME                  : {instanceName}");
+                                Console.WriteLine($"USB to SERIAL adapter/converter: {queryObj["PortName"]}");
+                                ports.Add(queryObj["PortName"].ToString());
+                                //SerialPort p = new SerialPort(port);
+                                //p.PortName = "COM11";
+                                //return port;
                             }
-                            Console.WriteLine($"INSTANCE NAME                  : {instanceName}");
-                            Console.WriteLine($"USB to SERIAL adapter/converter: {queryObj["PortName"]}");
-                            ports.Add(queryObj["PortName"].ToString());
-                            //SerialPort p = new SerialPort(port);
-                            //p.PortName = "COM11";
-                            //return port;
                         }
                     }
-                }
-                else
-                {
-                    Console.WriteLine("NONE FOUND.");
+                    else
+                    {
+                        Console.WriteLine("NONE FOUND.");
+                    }
                 }
             }
             catch (Exception ex)
