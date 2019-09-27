@@ -58,6 +58,7 @@ namespace DevicePreparation
         #region -- attributes --
 
         const string INGNAR = "0b00"; //Do NOT make this uppercase
+        const string INGNSR = "079b";
         const string IDTECH = "0acd";
         const string IdTechString = "idtech";
 
@@ -356,6 +357,10 @@ namespace DevicePreparation
                     foreach (var skName in rk.GetValueNames())
                     {
                         int offset = skName.IndexOf("VID_0B00");
+                        if(offset == -1)
+                        { 
+                            offset = skName.IndexOf("VID_079B");
+                        }
                         if(offset != -1)
                         { 
                             if(skName.IndexOf(compare1, offset, StringComparison.InvariantCultureIgnoreCase) != -1 ||
@@ -478,7 +483,7 @@ namespace DevicePreparation
                         continue;
                     }
                     Debug.WriteLine($"device: {deviceID}");
-                    if (deviceID.Contains("usb\\") && (deviceID.Contains($"vid_{INGNAR}") || deviceID.Contains($"vid_{IDTECH}")))
+                    if (deviceID.Contains("usb\\") && (deviceID.Contains($"vid_{INGNAR}") || deviceID.Contains($"vid_{INGNSR}") || deviceID.Contains($"vid_{IDTECH}")))
                     {
                         devices.Add(new USBDeviceInfo(
                             (string)device.GetPropertyValue("DeviceID"),

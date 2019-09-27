@@ -30,3 +30,4 @@ This an application to Configure Ingenico Devices.
 * 20190802 - Added PortHelper to reset devices.
            - Cleaned up log files.
 * 20190919 - Cleaned up COM Port preparation for WIN 7.
+* 20190927 - Added Ingenico serial mode device detection.
